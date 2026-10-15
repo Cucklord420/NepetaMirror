@@ -20,8 +20,6 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Original Python mirror verifier (parity reference)
-        run: python3 scripts/verify_repository.py
       - name: Rust unit and mirror content self-tests
         run: cargo test --manifest-path rust/verify-repository/Cargo.toml
       - name: Rust mirror verifier (full on-disk archive checks)
