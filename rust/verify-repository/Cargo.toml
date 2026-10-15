@@ -1,0 +1,11 @@
+[package]
+name = "nepeta-mirror-verify"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+sha2 = "0.10"
+bzip2 = "0.5"
+flate2 = "1"
+xz2 = "0.1"
