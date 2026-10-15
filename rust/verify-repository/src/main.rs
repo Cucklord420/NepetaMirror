@@ -189,6 +189,55 @@ mod tests {
         assert!(verify(&missing).is_err());
     }
 
+
+    #[test]
+    fn mutated_release_records_and_package_files_are_rejected() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static NEXT: AtomicUsize = AtomicUsize::new(0);
+        let root = std::env::temp_dir().join(format!(
+            "nepeta-negative-rust-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let index_bytes = b"fixture";
+        let mut release = String::from("SHA256:\n");
+        for name in INDEXES {
+            fs::write(root.join(name), index_bytes).unwrap();
+            release.push_str(&format!(" {} {} {}\n", digest(index_bytes), index_bytes.len(), name));
+        }
+        fs::write(root.join("Release"), &release).unwrap();
+        assert!(verify_release(&root).is_ok());
+        fs::write(root.join("Packages"), b"tampered").unwrap();
+        assert!(verify_release(&root).is_err());
+        fs::write(root.join("Packages"), index_bytes).unwrap();
+
+        let duplicate = format!("{release} {} {} {}\n", digest(index_bytes), index_bytes.len(), "Packages");
+        fs::write(root.join("Release"), duplicate).unwrap();
+        assert!(verify_release(&root).is_err());
+        let incomplete = format!("SHA256:\n {} {} Packages\n", digest(index_bytes), index_bytes.len());
+        fs::write(root.join("Release"), incomplete).unwrap();
+        assert!(verify_release(&root).is_err());
+
+        fs::create_dir_all(root.join("packages")).unwrap();
+        let bytes = b"fictional test archive";
+        fs::write(root.join("packages/example.deb"), bytes).unwrap();
+        let record = format!(
+            "Package: example\nFilename: packages/example.deb\nSize: {}\nSHA256: {}\n",
+            bytes.len(),
+            digest(bytes)
+        );
+        assert_eq!(verify_packages(&root, record.as_bytes()).unwrap(), 1);
+        let repeated = format!("{record}\n{record}");
+        assert!(verify_packages(&root, repeated.as_bytes()).is_err());
+        let traversed = record.replace("packages/example.deb", "packages/../example.deb");
+        assert!(verify_packages(&root, traversed.as_bytes()).is_err());
+        let tampered = record.replace(&digest(bytes), &"0".repeat(64));
+        assert!(verify_packages(&root, tampered.as_bytes()).is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn live_repository_content_passes_all_checks() {
         assert!(verify(&root()).is_ok());
