@@ -207,9 +207,9 @@ mod tests {
             "packages/nested/../example.deb",
             "packages\\example.deb",
             "packages/example\\.deb",
-            "packages/example.deb\\n",
-            "packages/example.deb\\r",
-            "packages/example.deb\\t",
+            "packages/example.deb\n",
+            "packages/example.deb\r",
+            "packages/example.deb\t",
         ] {
             assert!(!package_name_is_safe(filename), "accepted {filename:?}");
         }
@@ -229,7 +229,7 @@ mod tests {
         fs::write(root.join("original.deb"), data).unwrap();
         symlink(root.join("original.deb"), root.join("packages/example.deb")).unwrap();
         let record = format!(
-            "Filename: packages/example.deb\\nSize: {}\\nSHA256: {}\\n",
+            "Filename: packages/example.deb\nSize: {}\nSHA256: {}\n",
             data.len(),
             digest(data)
         );
