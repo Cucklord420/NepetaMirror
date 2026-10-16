@@ -156,17 +156,24 @@ fn verify_packages(root: &Path, plain: &[u8]) -> Result<usize, String> {
             continue;
         }
         let mut fields = HashMap::<String, String>::new();
+        let mut previous_key: Option<String> = None;
         for line in entry.lines() {
             if line.starts_with(' ') || line.starts_with('\t') {
+                // Debian Filename, Size, and SHA256 fields are single-line values.
+                if matches!(previous_key.as_deref(), Some("filename" | "size" | "sha256")) {
+                    return Err("Folded security-critical Packages field".into());
+                }
                 continue;
             }
-            if let Some((key, value)) = line.split_once(':') {
-                // Debian control field names are case-insensitive and cannot repeat.
-                let key = key.to_ascii_lowercase();
-                if fields.insert(key.clone(), value.trim().to_string()).is_some() {
-                    return Err(format!("Duplicate Packages control field: {key}"));
-                }
+            let (key, value) = line
+                .split_once(':')
+                .ok_or_else(|| "Malformed Packages control field".to_string())?;
+            // Debian control field names are case-insensitive and cannot repeat.
+            let key = key.to_ascii_lowercase();
+            if fields.insert(key.clone(), value.trim().to_string()).is_some() {
+                return Err(format!("Duplicate Packages control field: {key}"));
             }
+            previous_key = Some(key);
         }
         let filename = fields.get("filename").map_or("", String::as_str);
         if !package_name_is_safe(filename) {
@@ -325,6 +332,15 @@ mod tests {
         assert!(verify_packages(&root, duplicate_case.as_bytes()).is_err());
         let duplicate_checksum = format!("{record}sha256: {}\n", "0".repeat(64));
         assert!(verify_packages(&root, duplicate_checksum.as_bytes()).is_err());
+        let folded_filename = record.replace(
+            "Filename: packages/example.deb",
+            "Filename: packages/example.deb\n extra-payload.deb",
+        );
+        assert!(verify_packages(&root, folded_filename.as_bytes()).is_err());
+        let malformed_field = format!("{record}not-a-control-field\n");
+        assert!(verify_packages(&root, malformed_field.as_bytes()).is_err());
+        let allowed_description = format!("{record}Description: sample\n continued description\n");
+        assert_eq!(verify_packages(&root, allowed_description.as_bytes()).unwrap(), 1);
         let repeated = format!("{record}\n{record}");
         assert!(verify_packages(&root, repeated.as_bytes()).is_err());
         let traversed = record.replace("packages/example.deb", "packages/../example.deb");
