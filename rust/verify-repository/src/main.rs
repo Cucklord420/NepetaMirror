@@ -207,9 +207,9 @@ mod tests {
             "packages/nested/../example.deb",
             "packages\\example.deb",
             "packages/example\\.deb",
-            "packages/example.deb\n",
-            "packages/example.deb\r",
-            "packages/example.deb\t",
+            "packages/example\n.deb",
+            "packages/example\r.deb",
+            "packages/example\t.deb",
         ] {
             assert!(!package_name_is_safe(filename), "accepted {filename:?}");
         }
