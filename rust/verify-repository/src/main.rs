@@ -87,16 +87,29 @@ fn verify_index_parity(root: &Path) -> Result<Vec<u8>, String> {
 }
 
 fn package_name_is_safe(filename: &str) -> bool {
-    filename.starts_with("packages/")
-        && filename.ends_with(".deb")
-        && !filename.split('/').any(|component| component == "..")
-        && !Path::new(filename).is_absolute()
+    let Some(relative) = filename.strip_prefix("packages/") else {
+        return false;
+    };
+    relative.ends_with(".deb")
+        && !relative.contains('\\')
+        && !relative.contains(':')
+        && relative
+            .split('/')
+            .all(|part| !part.is_empty() && part != "." && part != "..")
 }
 
 fn verify_packages(root: &Path, plain: &[u8]) -> Result<usize, String> {
     let text = std::str::from_utf8(plain)
         .map_err(|_| "Packages index is not UTF-8".to_string())?
         .replace("\r\n", "\n");
+    // Resolve the expected package directory once; reject a directory symlink.
+    let canonical_root = fs::canonicalize(root).map_err(|e| format!("Cannot resolve root: {e}"))?;
+    let package_root = fs::canonicalize(root.join("packages"))
+        .map_err(|e| format!("Cannot resolve packages directory: {e}"))?;
+    if package_root != canonical_root.join("packages") {
+        return Err("Packages directory resolves outside its expected location".into());
+    }
+
     let mut seen = HashSet::<String>::new();
     let mut count = 0usize;
     for entry in text.trim().split("\n\n") {
@@ -119,7 +132,13 @@ fn verify_packages(root: &Path, plain: &[u8]) -> Result<usize, String> {
         if !seen.insert(filename.to_string()) {
             return Err(format!("Repeated package filename in Packages: {filename}"));
         }
-        let bytes = fs::read(root.join(filename)).map_err(|e| format!("{filename}: {e}"))?;
+        // Checking just the text is insufficient: a symlink can escape packages/.
+        let resolved = fs::canonicalize(root.join(filename))
+            .map_err(|e| format!("{filename}: {e}"))?;
+        if !resolved.starts_with(&package_root) {
+            return Err(format!("Package path resolves outside packages/: {filename}"));
+        }
+        let bytes = fs::read(&resolved).map_err(|e| format!("{filename}: {e}"))?;
         let size = fields
             .get("Size")
             .ok_or_else(|| "Missing Size field".to_string())?
@@ -173,6 +192,38 @@ mod tests {
         assert!(!package_name_is_safe("/packages/test.deb"));
         assert!(!package_name_is_safe("other/test.deb"));
         assert!(!package_name_is_safe("packages/test.zip"));
+        assert!(!package_name_is_safe("packages/..\\outside.deb"));
+        assert!(!package_name_is_safe("packages/dir\\..\\outside.deb"));
+        assert!(!package_name_is_safe("packages//test.deb"));
+        assert!(!package_name_is_safe("packages/./test.deb"));
+        assert!(!package_name_is_safe("packages/C:outside.deb"));
+        assert!(package_name_is_safe("packages/subdir/test.deb"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn package_symlink_outside_expected_directory_is_rejected() {
+        use std::os::unix::fs::symlink;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static NEXT: AtomicUsize = AtomicUsize::new(0);
+        let root = std::env::temp_dir().join(format!(
+            "nepeta-symlink-rust-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("packages")).unwrap();
+        let bytes = b"synthetic fixture; not a real package";
+        fs::write(root.join("outside.deb"), bytes).unwrap();
+        symlink("../outside.deb", root.join("packages/linked.deb")).unwrap();
+        let record = format!(
+            "Package: linked\nFilename: packages/linked.deb\nSize: {}\nSHA256: {}\n",
+            bytes.len(),
+            digest(bytes)
+        );
+        let failure = verify_packages(&root, record.as_bytes()).unwrap_err();
+        assert!(failure.contains("outside packages/"), "{failure}");
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
