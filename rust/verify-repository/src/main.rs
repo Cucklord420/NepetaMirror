@@ -87,10 +87,49 @@ fn verify_index_parity(root: &Path) -> Result<Vec<u8>, String> {
 }
 
 fn package_name_is_safe(filename: &str) -> bool {
-    filename.starts_with("packages/")
-        && filename.ends_with(".deb")
-        && !filename.split('/').any(|component| component == "..")
-        && !Path::new(filename).is_absolute()
+    let mut components = filename.split('/');
+    if components.next() != Some("packages") {
+        return false;
+    }
+    let remainder: Vec<&str> = components.collect();
+    !remainder.is_empty()
+        && remainder.last().is_some_and(|name| name.ends_with(".deb"))
+        && remainder.iter().all(|part| {
+            !part.is_empty()
+                && *part != "."
+                && *part != ".."
+                && !part.chars().any(|ch| {
+                    ch.is_control() || matches!(ch, '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|')
+                })
+        })
+}
+
+// Checks a mirror's file identity without following a package symlink/junction.
+// A checksum over a link target outside the mirror must not certify the checkout.
+fn checked_package_path(root: &Path, filename: &str) -> Result<PathBuf, String> {
+    if !package_name_is_safe(filename) {
+        return Err(format!("Unsafe or missing package filename: {filename}"));
+    }
+    let mut path = root.to_path_buf();
+    for component in filename.split('/') {
+        path.push(component);
+        let metadata = fs::symlink_metadata(&path)
+            .map_err(|e| format!("{filename}: {e}"))?;
+        if metadata.file_type().is_symlink() {
+            return Err(format!("Package uses a linked path: {filename}"));
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::MetadataExt;
+            if metadata.file_attributes() & 0x0400 != 0 {
+                return Err(format!("Package uses a reparse-point path: {filename}"));
+            }
+        }
+    }
+    if !path.is_file() {
+        return Err(format!("Not a regular package file: {filename}"));
+    }
+    Ok(path)
 }
 
 fn verify_packages(root: &Path, plain: &[u8]) -> Result<usize, String> {
@@ -119,7 +158,8 @@ fn verify_packages(root: &Path, plain: &[u8]) -> Result<usize, String> {
         if !seen.insert(filename.to_string()) {
             return Err(format!("Repeated package filename in Packages: {filename}"));
         }
-        let bytes = fs::read(root.join(filename)).map_err(|e| format!("{filename}: {e}"))?;
+        let package_path = checked_package_path(root, filename)?;
+        let bytes = fs::read(package_path).map_err(|e| format!("{filename}: {e}"))?;
         let size = fields
             .get("Size")
             .ok_or_else(|| "Missing Size field".to_string())?
@@ -173,6 +213,11 @@ mod tests {
         assert!(!package_name_is_safe("/packages/test.deb"));
         assert!(!package_name_is_safe("other/test.deb"));
         assert!(!package_name_is_safe("packages/test.zip"));
+        for bad in ["packages//test.deb", "packages/./test.deb",
+                    "packages\\test.deb", "packages/folder/../test.deb",
+                    "packages/test?.deb", "packages/test.deb/"] {
+            assert!(!package_name_is_safe(bad), "accepted unsafe package path: {bad}");
+        }
     }
 
     #[test]
@@ -242,4 +287,27 @@ mod tests {
     fn live_repository_content_passes_all_checks() {
         assert!(verify(&root()).is_ok());
     }
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_archive_does_not_count_as_an_in_repository_payload() {
+        use std::os::unix::fs::symlink;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static COUNTER: AtomicUsize = AtomicUsize::new(0);
+        let root = std::env::temp_dir().join(format!(
+            "nepeta-rust-link-{}-{}",
+            std::process::id(), COUNTER.fetch_add(1, Ordering::Relaxed)
+        ));
+        fs::create_dir_all(root.join("packages")).unwrap();
+        let actual = root.join("actual.deb");
+        let payload = b"fixture payload only";
+        fs::write(&actual, payload).unwrap();
+        symlink(&actual, root.join("packages/alias.deb")).unwrap();
+        let record = format!(
+            "Filename: packages/alias.deb\nSize: {}\nSHA256: {}\n",
+            payload.len(), digest(payload)
+        );
+        assert!(verify_packages(&root, record.as_bytes()).is_err());
+        fs::remove_dir_all(&root).unwrap();
+    }
+
 }
