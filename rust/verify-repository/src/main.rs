@@ -93,6 +93,7 @@ fn package_name_is_safe(filename: &str) -> bool {
     relative.ends_with(".deb")
         && !relative.contains('\\')
         && !relative.contains(':')
+        && !relative.chars().any(char::is_control)
         && relative
             .split('/')
             .all(|part| !part.is_empty() && part != "." && part != "..")
@@ -132,11 +133,23 @@ fn verify_packages(root: &Path, plain: &[u8]) -> Result<usize, String> {
         if !seen.insert(filename.to_string()) {
             return Err(format!("Repeated package filename in Packages: {filename}"));
         }
-        // Checking just the text is insufficient: a symlink can escape packages/.
-        let resolved = fs::canonicalize(root.join(filename))
-            .map_err(|e| format!("{filename}: {e}"))?;
+        // Reject aliases even when their targets remain inside the packages directory.
+        let mut checked = root.to_path_buf();
+        for part in filename.split('/') {
+            checked.push(part);
+            let metadata = fs::symlink_metadata(&checked)
+                .map_err(|e| format!("{filename}: {e}"))?;
+            if metadata.file_type().is_symlink() {
+                return Err(format!("Symlink in package path: {filename}"));
+            }
+        }
+        // Junctions/reparse points and other links must also remain contained.
+        let resolved = fs::canonicalize(&checked).map_err(|e| format!("{filename}: {e}"))?;
         if !resolved.starts_with(&package_root) {
             return Err(format!("Package path resolves outside packages/: {filename}"));
+        }
+        if !fs::metadata(&resolved).map_err(|e| format!("{filename}: {e}"))?.is_file() {
+            return Err(format!("Package is not a regular file: {filename}"));
         }
         let bytes = fs::read(&resolved).map_err(|e| format!("{filename}: {e}"))?;
         let size = fields
@@ -197,6 +210,8 @@ mod tests {
         assert!(!package_name_is_safe("packages//test.deb"));
         assert!(!package_name_is_safe("packages/./test.deb"));
         assert!(!package_name_is_safe("packages/C:outside.deb"));
+        assert!(!package_name_is_safe("packages/bad\nname.deb"));
+        assert!(!package_name_is_safe("packages/bad\tname.deb"));
         assert!(package_name_is_safe("packages/subdir/test.deb"));
     }
 
@@ -222,7 +237,7 @@ mod tests {
             digest(bytes)
         );
         let failure = verify_packages(&root, record.as_bytes()).unwrap_err();
-        assert!(failure.contains("outside packages/"), "{failure}");
+        assert!(failure.contains("Symlink in package path"), "{failure}");
         fs::remove_dir_all(root).unwrap();
     }
 
