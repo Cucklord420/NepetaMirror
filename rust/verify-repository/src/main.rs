@@ -59,9 +59,9 @@ fn verify_release(root: &Path) -> Result<(), String> {
     Ok(())
 }
 
-fn decompressed(root: &Path, name: &str) -> Result<Vec<u8>, String> {
+fn decompressed(root: &Path, name: &str, expected_size: usize) -> Result<Vec<u8>, String> {
     let file = File::open(root.join(name)).map_err(|e| e.to_string())?;
-    let mut reader: Box<dyn Read> = match name {
+    let reader: Box<dyn Read> = match name {
         "Packages.bz2" => Box::new(BzDecoder::new(file)),
         "Packages.gz" => Box::new(GzDecoder::new(file)),
         "Packages.lzma" | "Packages.xz" => {
@@ -71,15 +71,25 @@ fn decompressed(root: &Path, name: &str) -> Result<Vec<u8>, String> {
         }
         _ => return Err(format!("Unknown index compression: {name}")),
     };
+    // Decompression must stop at the known plain-index size plus one byte.
+    // A malicious compressed index can otherwise exhaust CI memory.
+    let max_output = u64::try_from(expected_size)
+        .ok()
+        .and_then(|size| size.checked_add(1))
+        .ok_or_else(|| format!("{name}: cannot bound decompressed index size"))?;
     let mut output = Vec::new();
-    reader.read_to_end(&mut output).map_err(|e| format!("{name}: {e}"))?;
+    reader.take(max_output).read_to_end(&mut output)
+        .map_err(|e| format!("{name}: {e}"))?;
+    if output.len() > expected_size {
+        return Err(format!("{name} expands beyond the Packages index size"));
+    }
     Ok(output)
 }
 
 fn verify_index_parity(root: &Path) -> Result<Vec<u8>, String> {
     let plain = index_bytes(root, "Packages")?;
     for name in INDEXES.iter().skip(1) {
-        if decompressed(root, name)? != plain {
+        if decompressed(root, name, plain.len())? != plain {
             return Err(format!("{name} does not decompress to the Packages index"));
         }
     }
@@ -173,6 +183,33 @@ mod tests {
         assert!(!package_name_is_safe("/packages/test.deb"));
         assert!(!package_name_is_safe("other/test.deb"));
         assert!(!package_name_is_safe("packages/test.zip"));
+    }
+
+    #[test]
+    fn compressed_index_output_is_bounded_by_plain_index_size() {
+        use flate2::write::GzEncoder;
+        use flate2::Compression;
+        use std::io::Write;
+
+        let root = std::env::temp_dir().join(format!(
+            "nepeta-index-bound-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+        encoder.write_all(&vec![b'x'; 65_536]).unwrap();
+        fs::write(root.join("Packages.gz"), encoder.finish().unwrap()).unwrap();
+
+        let error = decompressed(&root, "Packages.gz", 8).unwrap_err();
+        assert!(error.contains("expands beyond the Packages index size"));
+
+        let mut exact = GzEncoder::new(Vec::new(), Compression::default());
+        exact.write_all(b"index").unwrap();
+        fs::write(root.join("Packages.gz"), exact.finish().unwrap()).unwrap();
+        assert_eq!(decompressed(&root, "Packages.gz", 5).unwrap(), b"index");
+
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
