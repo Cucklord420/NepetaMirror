@@ -148,10 +148,14 @@ fn verify_packages(root: &Path, plain: &[u8]) -> Result<usize, String> {
                 continue;
             }
             if let Some((key, value)) = line.split_once(':') {
-                fields.insert(key.to_string(), value.trim().to_string());
+                // Debian control field names are case-insensitive and cannot repeat.
+                let key = key.to_ascii_lowercase();
+                if fields.insert(key.clone(), value.trim().to_string()).is_some() {
+                    return Err(format!("Duplicate Packages control field: {key}"));
+                }
             }
         }
-        let filename = fields.get("Filename").map_or("", String::as_str);
+        let filename = fields.get("filename").map_or("", String::as_str);
         if !package_name_is_safe(filename) {
             return Err(format!("Unsafe or missing package filename: {filename}"));
         }
@@ -161,11 +165,11 @@ fn verify_packages(root: &Path, plain: &[u8]) -> Result<usize, String> {
         let package_path = checked_package_path(root, filename)?;
         let bytes = fs::read(package_path).map_err(|e| format!("{filename}: {e}"))?;
         let size = fields
-            .get("Size")
+            .get("size")
             .ok_or_else(|| "Missing Size field".to_string())?
             .parse::<usize>()
             .map_err(|_| "Invalid Size field".to_string())?;
-        let expected = fields.get("SHA256").ok_or_else(|| "Missing SHA256 field".to_string())?;
+        let expected = fields.get("sha256").ok_or_else(|| "Missing SHA256 field".to_string())?;
         if size != bytes.len() || !expected.eq_ignore_ascii_case(&digest(&bytes)) {
             return Err(format!("Package checksum or length mismatch: {filename}"));
         }
@@ -274,6 +278,18 @@ mod tests {
             digest(bytes)
         );
         assert_eq!(verify_packages(&root, record.as_bytes()).unwrap(), 1);
+        // Debian control field names are case-insensitive; duplicates are invalid.
+        let mixed_case = record
+            .replace("Filename:", "fIlEnAmE:")
+            .replace("Size:", "sIzE:")
+            .replace("SHA256:", "sha256:");
+        assert_eq!(verify_packages(&root, mixed_case.as_bytes()).unwrap(), 1);
+        let duplicate = format!("{record}Filename: packages/not-the-archive.deb\n");
+        assert!(verify_packages(&root, duplicate.as_bytes()).is_err());
+        let duplicate_case = format!("{record}fIlEnAmE: packages/not-the-archive.deb\n");
+        assert!(verify_packages(&root, duplicate_case.as_bytes()).is_err());
+        let duplicate_checksum = format!("{record}sha256: {}\n", "0".repeat(64));
+        assert!(verify_packages(&root, duplicate_checksum.as_bytes()).is_err());
         let repeated = format!("{record}\n{record}");
         assert!(verify_packages(&root, repeated.as_bytes()).is_err());
         let traversed = record.replace("packages/example.deb", "packages/../example.deb");
