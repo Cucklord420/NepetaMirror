@@ -17,12 +17,39 @@ fn digest(data: &[u8]) -> String {
     format!("{:x}", Sha256::digest(data))
 }
 
+// Refuse links in metadata, indexes, site assets, and package paths, including
+// ancestors of the repository root. Checks do not make a concurrently edited
+// checkout race-free; the verifier should run against a stable checkout.
+fn checked_regular_file(root: &Path, name: &str) -> Result<PathBuf, String> {
+    let path = root.join(name);
+    for ancestor in path.ancestors() {
+        let metadata =
+            fs::symlink_metadata(ancestor).map_err(|e| format!("Cannot inspect {name}: {e}"))?;
+        if metadata.file_type().is_symlink() {
+            return Err(format!("Linked file or directory is not allowed: {name}"));
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::MetadataExt;
+            if metadata.file_attributes() & 0x0400 != 0 {
+                return Err(format!("Reparse-point path is not allowed: {name}"));
+            }
+        }
+    }
+    if !path.is_file() {
+        return Err(format!("Not a regular file: {name}"));
+    }
+    Ok(path)
+}
+
 fn index_bytes(root: &Path, name: &str) -> Result<Vec<u8>, String> {
-    fs::read(root.join(name)).map_err(|e| format!("Cannot read {name}: {e}"))
+    fs::read(checked_regular_file(root, name)?)
+        .map_err(|e| format!("Cannot read {name}: {e}"))
 }
 
 fn verify_release(root: &Path) -> Result<(), String> {
-    let release = fs::read_to_string(root.join("Release")).map_err(|e| e.to_string())?;
+    let release =
+        fs::read_to_string(checked_regular_file(root, "Release")?).map_err(|e| e.to_string())?;
     let mut in_sha = false;
     let mut found = HashSet::<String>::new();
     for line in release.lines() {
@@ -60,7 +87,7 @@ fn verify_release(root: &Path) -> Result<(), String> {
 }
 
 fn decompressed(root: &Path, name: &str) -> Result<Vec<u8>, String> {
-    let file = File::open(root.join(name)).map_err(|e| e.to_string())?;
+    let file = File::open(checked_regular_file(root, name)?).map_err(|e| e.to_string())?;
     let mut reader: Box<dyn Read> = match name {
         "Packages.bz2" => Box::new(BzDecoder::new(file)),
         "Packages.gz" => Box::new(GzDecoder::new(file)),
@@ -104,32 +131,12 @@ fn package_name_is_safe(filename: &str) -> bool {
         })
 }
 
-// Checks a mirror's file identity without following a package symlink/junction.
-// A checksum over a link target outside the mirror must not certify the checkout.
+// A package must be a real file in the checkout, never a linked target.
 fn checked_package_path(root: &Path, filename: &str) -> Result<PathBuf, String> {
     if !package_name_is_safe(filename) {
         return Err(format!("Unsafe or missing package filename: {filename}"));
     }
-    let mut path = root.to_path_buf();
-    for component in filename.split('/') {
-        path.push(component);
-        let metadata = fs::symlink_metadata(&path)
-            .map_err(|e| format!("{filename}: {e}"))?;
-        if metadata.file_type().is_symlink() {
-            return Err(format!("Package uses a linked path: {filename}"));
-        }
-        #[cfg(windows)]
-        {
-            use std::os::windows::fs::MetadataExt;
-            if metadata.file_attributes() & 0x0400 != 0 {
-                return Err(format!("Package uses a reparse-point path: {filename}"));
-            }
-        }
-    }
-    if !path.is_file() {
-        return Err(format!("Not a regular package file: {filename}"));
-    }
-    Ok(path)
+    checked_regular_file(root, filename)
 }
 
 fn verify_packages(root: &Path, plain: &[u8]) -> Result<usize, String> {
@@ -183,9 +190,7 @@ fn verify_packages(root: &Path, plain: &[u8]) -> Result<usize, String> {
 
 fn verify(root: &Path) -> Result<usize, String> {
     for required in ["README.md", "index.html", "style.css"] {
-        if !root.join(required).is_file() {
-            return Err(format!("Missing static site file: {required}"));
-        }
+        checked_regular_file(root, required)?;
     }
     verify_release(root)?;
     let plain = verify_index_parity(root)?;
@@ -297,6 +302,44 @@ mod tests {
         let tampered = record.replace(&digest(bytes), &"0".repeat(64));
         assert!(verify_packages(&root, tampered.as_bytes()).is_err());
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn linked_release_indexes_and_site_assets_are_rejected() {
+        use std::os::unix::fs::symlink;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static NEXT: AtomicUsize = AtomicUsize::new(0);
+
+        let root = std::env::temp_dir().join(format!(
+            "nepeta-metadata-links-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let data = b"fictional index";
+        let mut release = String::from("SHA256:\n");
+        for name in INDEXES {
+            fs::write(root.join(name), data).unwrap();
+            release.push_str(&format!(" {} {} {}\n", digest(data), data.len(), name));
+        }
+        fs::write(root.join("external-release"), &release).unwrap();
+        symlink("external-release", root.join("Release")).unwrap();
+        assert!(verify_release(&root).is_err(), "linked Release accepted");
+
+        fs::remove_file(root.join("Release")).unwrap();
+        fs::write(root.join("Release"), release).unwrap();
+        assert!(verify_release(&root).is_ok());
+        fs::rename(root.join("Packages.gz"), root.join("external-packages.gz")).unwrap();
+        symlink("external-packages.gz", root.join("Packages.gz")).unwrap();
+        assert!(verify_release(&root).is_err(), "linked Packages.gz accepted");
+
+        fs::write(root.join("README.md"), "fixture").unwrap();
+        fs::rename(root.join("README.md"), root.join("outside-readme")).unwrap();
+        symlink("outside-readme", root.join("README.md")).unwrap();
+        assert!(checked_regular_file(&root, "README.md").is_err());
+
+        fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]
