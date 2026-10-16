@@ -89,8 +89,32 @@ fn verify_index_parity(root: &Path) -> Result<Vec<u8>, String> {
 fn package_name_is_safe(filename: &str) -> bool {
     filename.starts_with("packages/")
         && filename.ends_with(".deb")
-        && !filename.split('/').any(|component| component == "..")
-        && !Path::new(filename).is_absolute()
+        && !filename.contains('\\')
+        && filename.split('/').all(|part| {
+            !part.is_empty()
+                && part != "."
+                && part != ".."
+                && !part.chars().any(char::is_control)
+        })
+}
+
+// The mirror must not validate an archive reached through a symlink outside its tree.
+// The filesystem can still change between inspection and reading; verification is read-only
+// and is intended for a fixed Git checkout, not an attacker-writable live directory.
+fn read_checked_package(root: &Path, filename: &str) -> Result<Vec<u8>, String> {
+    let mut path = root.to_path_buf();
+    for part in filename.split('/') {
+        path.push(part);
+        let metadata = fs::symlink_metadata(&path)
+            .map_err(|e| format!("Cannot inspect {filename}: {e}"))?;
+        if metadata.file_type().is_symlink() {
+            return Err(format!("Symlink in package path: {filename}"));
+        }
+    }
+    if !fs::metadata(&path).map_err(|e| format!("Cannot stat {filename}: {e}"))?.is_file() {
+        return Err(format!("Package is not a regular file: {filename}"));
+    }
+    fs::read(&path).map_err(|e| format!("Cannot read {filename}: {e}"))
 }
 
 fn verify_packages(root: &Path, plain: &[u8]) -> Result<usize, String> {
@@ -119,7 +143,7 @@ fn verify_packages(root: &Path, plain: &[u8]) -> Result<usize, String> {
         if !seen.insert(filename.to_string()) {
             return Err(format!("Repeated package filename in Packages: {filename}"));
         }
-        let bytes = fs::read(root.join(filename)).map_err(|e| format!("{filename}: {e}"))?;
+        let bytes = read_checked_package(root, filename)?;
         let size = fields
             .get("Size")
             .ok_or_else(|| "Missing Size field".to_string())?
@@ -173,6 +197,44 @@ mod tests {
         assert!(!package_name_is_safe("/packages/test.deb"));
         assert!(!package_name_is_safe("other/test.deb"));
         assert!(!package_name_is_safe("packages/test.zip"));
+    }
+
+    #[test]
+    fn rejects_path_aliases_and_control_characters() {
+        for filename in [
+            "packages//example.deb",
+            "packages/./example.deb",
+            "packages/nested/../example.deb",
+            "packages\\example.deb",
+            "packages/example\\.deb",
+            "packages/example.deb\\n",
+            "packages/example.deb\\r",
+            "packages/example.deb\\t",
+        ] {
+            assert!(!package_name_is_safe(filename), "accepted {filename:?}");
+        }
+        assert!(package_name_is_safe("packages/nested/example.deb"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn package_symlink_cannot_pass_using_valid_checksum() {
+        use std::os::unix::fs::symlink;
+        let root = std::env::temp_dir().join(format!(
+            "nepeta-link-guard-{}", std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("packages")).unwrap();
+        let data = b"fixture source bytes";
+        fs::write(root.join("original.deb"), data).unwrap();
+        symlink(root.join("original.deb"), root.join("packages/example.deb")).unwrap();
+        let record = format!(
+            "Filename: packages/example.deb\\nSize: {}\\nSHA256: {}\\n",
+            data.len(),
+            digest(data)
+        );
+        assert!(verify_packages(&root, record.as_bytes()).is_err());
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
