@@ -86,9 +86,9 @@ fn verify_release(root: &Path) -> Result<(), String> {
     Ok(())
 }
 
-fn decompressed(root: &Path, name: &str) -> Result<Vec<u8>, String> {
+fn decompressed(root: &Path, name: &str, max_len: usize) -> Result<Vec<u8>, String> {
     let file = File::open(checked_regular_file(root, name)?).map_err(|e| e.to_string())?;
-    let mut reader: Box<dyn Read> = match name {
+    let reader: Box<dyn Read> = match name {
         "Packages.bz2" => Box::new(BzDecoder::new(file)),
         "Packages.gz" => Box::new(GzDecoder::new(file)),
         "Packages.lzma" | "Packages.xz" => {
@@ -98,15 +98,21 @@ fn decompressed(root: &Path, name: &str) -> Result<Vec<u8>, String> {
         }
         _ => return Err(format!("Unknown index compression: {name}")),
     };
+    // An index that expands beyond the already verified plain index cannot
+    // match it. Bound inflation before allocating the entire output.
+    let mut bounded = reader.take((max_len as u64).saturating_add(1));
     let mut output = Vec::new();
-    reader.read_to_end(&mut output).map_err(|e| format!("{name}: {e}"))?;
+    bounded.read_to_end(&mut output).map_err(|e| format!("{name}: {e}"))?;
+    if output.len() > max_len {
+        return Err(format!("{name} decompresses beyond the Packages index size"));
+    }
     Ok(output)
 }
 
 fn verify_index_parity(root: &Path) -> Result<Vec<u8>, String> {
     let plain = index_bytes(root, "Packages")?;
     for name in INDEXES.iter().skip(1) {
-        if decompressed(root, name)? != plain {
+        if decompressed(root, name, plain.len())? != plain {
             return Err(format!("{name} does not decompress to the Packages index"));
         }
     }
@@ -235,6 +241,30 @@ mod tests {
             digest(b"abc"),
             ["ba7816bf8f01cfea414140de5dae2223", "b00361a396177a9cb410ff61f20015ad"].concat()
         );
+    }
+
+    #[test]
+    fn compressed_index_expansion_is_bounded_by_plain_index() {
+        use flate2::{write::GzEncoder, Compression};
+        use std::io::Write;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        static NEXT: AtomicUsize = AtomicUsize::new(0);
+        let root = std::env::temp_dir().join(format!(
+            "nepeta-bounded-inflate-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let payload = vec![b'X'; 16_384];
+        let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+        encoder.write_all(&payload).unwrap();
+        fs::write(root.join("Packages.gz"), encoder.finish().unwrap()).unwrap();
+
+        assert!(decompressed(&root, "Packages.gz", 100).is_err());
+        assert_eq!(decompressed(&root, "Packages.gz", payload.len()).unwrap(), payload);
+
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
