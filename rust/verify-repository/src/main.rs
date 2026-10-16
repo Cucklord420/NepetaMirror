@@ -145,15 +145,26 @@ fn verify_packages(root: &Path, plain: &[u8]) -> Result<usize, String> {
             continue;
         }
         let mut fields = HashMap::<String, String>::new();
+        let mut previous_key: Option<String> = None;
         for line in entry.lines() {
             if line.starts_with(' ') || line.starts_with('\t') {
+                // Debian Filename, Size, and SHA256 fields are single-line values.
+                if matches!(previous_key.as_deref(), Some("filename" | "size" | "sha256")) {
+                    return Err("Folded security-critical Packages field".into());
+                }
                 continue;
             }
-            if let Some((key, value)) = line.split_once(':') {
-                fields.insert(key.to_string(), value.trim().to_string());
+            let (key, value) = line
+                .split_once(':')
+                .ok_or_else(|| "Malformed Packages control field".to_string())?;
+            // Debian field names are case-insensitive; duplicates are invalid.
+            let key = key.to_ascii_lowercase();
+            if fields.insert(key.clone(), value.trim().to_string()).is_some() {
+                return Err(format!("Duplicate Packages control field: {key}"));
             }
+            previous_key = Some(key);
         }
-        let filename = fields.get("Filename").map_or("", String::as_str);
+        let filename = fields.get("filename").map_or("", String::as_str);
         if !package_name_is_safe(filename) {
             return Err(format!("Unsafe or missing package filename: {filename}"));
         }
@@ -187,11 +198,11 @@ fn verify_packages(root: &Path, plain: &[u8]) -> Result<usize, String> {
         }
         let bytes = fs::read(&resolved).map_err(|e| format!("{filename}: {e}"))?;
         let size = fields
-            .get("Size")
+            .get("size")
             .ok_or_else(|| "Missing Size field".to_string())?
             .parse::<usize>()
             .map_err(|_| "Invalid Size field".to_string())?;
-        let expected = fields.get("SHA256").ok_or_else(|| "Missing SHA256 field".to_string())?;
+        let expected = fields.get("sha256").ok_or_else(|| "Missing SHA256 field".to_string())?;
         if size != bytes.len() || !expected.eq_ignore_ascii_case(&digest(&bytes)) {
             return Err(format!("Package checksum or length mismatch: {filename}"));
         }
@@ -329,6 +340,22 @@ mod tests {
             digest(bytes)
         );
         assert_eq!(verify_packages(&root, record.as_bytes()).unwrap(), 1);
+        let mixed_case = record
+            .replace("Filename:", "fIlEnAmE:")
+            .replace("Size:", "sIzE:")
+            .replace("SHA256:", "sha256:");
+        assert_eq!(verify_packages(&root, mixed_case.as_bytes()).unwrap(), 1);
+        for ambiguous in [
+            format!("{record}Filename: packages/other.deb\n"),
+            format!("{record}fIlEnAmE: packages/other.deb\n"),
+            format!("{record}sha256: {}\n", "0".repeat(64)),
+            record.replace("Filename: packages/example.deb", "Filename: packages/example.deb\n extra.deb"),
+            format!("{record}not-a-control-field\n"),
+        ] {
+            assert!(verify_packages(&root, ambiguous.as_bytes()).is_err());
+        }
+        let description = format!("{record}Description: sample\n continued description\n");
+        assert_eq!(verify_packages(&root, description.as_bytes()).unwrap(), 1);
         let repeated = format!("{record}\n{record}");
         assert!(verify_packages(&root, repeated.as_bytes()).is_err());
         let traversed = record.replace("packages/example.deb", "packages/../example.deb");
