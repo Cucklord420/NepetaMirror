@@ -93,7 +93,7 @@ fn package_name_is_safe(filename: &str) -> bool {
     relative.ends_with(".deb")
         && !relative.contains('\\')
         && !relative.contains(':')
-        && !relative.chars().any(char::is_control)
+        && !relative.chars().any(|ch| ch.is_control() || matches!(ch, '*' | '?' | '"' | '<' | '>' | '|'))
         && relative
             .split('/')
             .all(|part| !part.is_empty() && part != "." && part != "..")
@@ -141,6 +141,13 @@ fn verify_packages(root: &Path, plain: &[u8]) -> Result<usize, String> {
                 .map_err(|e| format!("{filename}: {e}"))?;
             if metadata.file_type().is_symlink() {
                 return Err(format!("Symlink in package path: {filename}"));
+            }
+            #[cfg(windows)]
+            {
+                use std::os::windows::fs::MetadataExt;
+                if metadata.file_attributes() & 0x0400 != 0 {
+                    return Err(format!("Reparse-point in package path: {filename}"));
+                }
             }
         }
         // Junctions/reparse points and other links must also remain contained.
@@ -212,6 +219,8 @@ mod tests {
         assert!(!package_name_is_safe("packages/C:outside.deb"));
         assert!(!package_name_is_safe("packages/bad\nname.deb"));
         assert!(!package_name_is_safe("packages/bad\tname.deb"));
+        assert!(!package_name_is_safe("packages/bad?name.deb"));
+        assert!(!package_name_is_safe("packages/bad|name.deb"));
         assert!(package_name_is_safe("packages/subdir/test.deb"));
     }
 
