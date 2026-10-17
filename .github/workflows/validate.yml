@@ -19,10 +19,45 @@ jobs:
         os: [ubuntu-latest, windows-latest]
     timeout-minutes: 15
     steps:
+      - name: Enable case-sensitive Windows checkout
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $workspace = $env:GITHUB_WORKSPACE
+          New-Item -ItemType Directory -Force -Path $workspace | Out-Null
+          $marker = Join-Path $workspace '.case-sensitivity-probe'
+          New-Item -ItemType File -Force -Path $marker | Out-Null
+          fsutil.exe file setCaseSensitiveInfo $workspace enable
+          if ($LASTEXITCODE -ne 0) {
+            throw 'Could not enable case-sensitive checkout directory'
+          }
+          Remove-Item -LiteralPath $marker
+          $upperName = Join-Path $workspace '.CaseSensitivityProbe'
+          $lowerName = Join-Path $workspace '.casesensitivityprobe'
+          [System.IO.File]::Open($upperName, [System.IO.FileMode]::CreateNew).Dispose()
+          try {
+            [System.IO.File]::Open($lowerName, [System.IO.FileMode]::CreateNew).Dispose()
+          }
+          catch {
+            throw 'Checkout directory did not preserve distinct case-sensitive names'
+          }
+          Remove-Item -LiteralPath $upperName, $lowerName
+
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+
+      - name: Verify distinct mirror paths on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          if (-not (Test-Path -LiteralPath (Join-Path $PWD 'Packages') -PathType Leaf)) {
+            throw 'Checkout did not preserve the Packages index file'
+          }
+          if (-not (Test-Path -LiteralPath (Join-Path $PWD 'packages') -PathType Container)) {
+            throw 'Checkout did not preserve the packages archive directory'
+          }
 
       - name: Check Rust formatting
         run: cargo fmt --manifest-path rust/verify-repository/Cargo.toml -- --check
