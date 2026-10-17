@@ -1043,6 +1043,7 @@ mod tests {
             "packages/trailing-dot..deb.",
             "packages/non-ascii-é.deb",
             "packages/bad\nname.deb",
+            "packages/with\tTab.deb",
             "packages/bad?name.deb",
             "/packages/test.deb",
             "other/test.deb",
@@ -1051,6 +1052,13 @@ mod tests {
             assert!(
                 !package_name_is_safe(path),
                 "accepted unsafe path: {path:?}"
+            );
+        }
+        for byte in (0u8..=0x1f).chain(std::iter::once(0x7f)) {
+            let path = format!("packages/control{}character.deb", char::from(byte));
+            assert!(
+                !package_name_is_safe(&path),
+                "accepted ASCII control byte 0x{byte:02x}"
             );
         }
     }
@@ -1358,6 +1366,25 @@ mod tests {
         symlink("../outside.deb", root.path().join("packages/linked.deb")).unwrap();
         let record = package_record(bytes).replace("packages/example.deb", "packages/linked.deb");
         assert!(verify_packages(root.path(), record.as_bytes()).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_package_with_in_scope_target_is_rejected() {
+        use std::os::unix::fs::symlink;
+
+        let root = TestDir::new("nepeta-package-internal-symlink").unwrap();
+        let package_dir = root.path().join("packages");
+        fs::create_dir(&package_dir).unwrap();
+        let bytes = b"synthetic fixture, not a real package";
+        fs::write(package_dir.join("real.deb"), bytes).unwrap();
+        symlink("real.deb", package_dir.join("linked.deb")).unwrap();
+        let record = package_record(bytes).replace("packages/example.deb", "packages/linked.deb");
+        let error = verify_packages(root.path(), record.as_bytes()).unwrap_err();
+        assert!(
+            error.contains("Linked mirror path is not allowed"),
+            "internal package symlink was not rejected explicitly: {error}"
+        );
     }
 
     #[cfg(unix)]
