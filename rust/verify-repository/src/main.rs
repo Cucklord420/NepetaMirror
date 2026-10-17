@@ -109,10 +109,17 @@ fn verify_packages(root: &Path, plain: &[u8]) -> Result<usize, String> {
                 continue;
             }
             if let Some((key, value)) = line.split_once(':') {
-                fields.insert(key.to_string(), value.trim().to_string());
+                // Debian control field names are case-insensitive and unique per stanza.
+                let normalized_key = key.to_ascii_lowercase();
+                if fields
+                    .insert(normalized_key, value.trim().to_string())
+                    .is_some()
+                {
+                    return Err(format!("Duplicate package control field: {key}"));
+                }
             }
         }
-        let filename = fields.get("Filename").map_or("", String::as_str);
+        let filename = fields.get("filename").map_or("", String::as_str);
         if !package_name_is_safe(filename) {
             return Err(format!("Unsafe or missing package filename: {filename}"));
         }
@@ -121,11 +128,11 @@ fn verify_packages(root: &Path, plain: &[u8]) -> Result<usize, String> {
         }
         let bytes = fs::read(root.join(filename)).map_err(|e| format!("{filename}: {e}"))?;
         let size = fields
-            .get("Size")
+            .get("size")
             .ok_or_else(|| "Missing Size field".to_string())?
             .parse::<usize>()
             .map_err(|_| "Invalid Size field".to_string())?;
-        let expected = fields.get("SHA256").ok_or_else(|| "Missing SHA256 field".to_string())?;
+        let expected = fields.get("sha256").ok_or_else(|| "Missing SHA256 field".to_string())?;
         if size != bytes.len() || !expected.eq_ignore_ascii_case(&digest(&bytes)) {
             return Err(format!("Package checksum or length mismatch: {filename}"));
         }
@@ -231,6 +238,19 @@ mod tests {
         assert_eq!(verify_packages(&root, record.as_bytes()).unwrap(), 1);
         let repeated = format!("{record}\n{record}");
         assert!(verify_packages(&root, repeated.as_bytes()).is_err());
+
+        let duplicate_field = format!("{record}Filename: packages/example.deb\n");
+        let error = verify_packages(&root, duplicate_field.as_bytes()).unwrap_err();
+        assert!(error.contains("Duplicate package control field"), "{error}");
+        let differently_cased_duplicate = format!("{record}filename: packages/example.deb\n");
+        assert!(verify_packages(&root, differently_cased_duplicate.as_bytes()).is_err());
+
+        let mixed_case_fields = record
+            .replace("Filename:", "fIlEnAmE:")
+            .replace("Size:", "sIzE:")
+            .replace("SHA256:", "sha256:");
+        assert_eq!(verify_packages(&root, mixed_case_fields.as_bytes()).unwrap(), 1);
+
         let traversed = record.replace("packages/example.deb", "packages/../example.deb");
         assert!(verify_packages(&root, traversed.as_bytes()).is_err());
         let tampered = record.replace(&digest(bytes), &"0".repeat(64));
