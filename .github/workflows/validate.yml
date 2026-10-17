@@ -25,13 +25,10 @@ jobs:
         run: |
           $workspace = $env:GITHUB_WORKSPACE
           New-Item -ItemType Directory -Force -Path $workspace | Out-Null
-          $marker = Join-Path $workspace '.case-sensitivity-probe'
-          New-Item -ItemType File -Force -Path $marker | Out-Null
           fsutil.exe file setCaseSensitiveInfo $workspace enable
           if ($LASTEXITCODE -ne 0) {
             throw 'Could not enable case-sensitive checkout directory'
           }
-          Remove-Item -LiteralPath $marker
           $upperName = Join-Path $workspace '.CaseSensitivityProbe'
           $lowerName = Join-Path $workspace '.casesensitivityprobe'
           [System.IO.File]::Open($upperName, [System.IO.FileMode]::CreateNew).Dispose()
