@@ -564,7 +564,13 @@ fn hash_sha256_file(path: &Path, expected_size: u64, filename: &str) -> Result<S
         }
         hasher.update(&buffer[..read]);
     }
-    if total !=fn list_package_archives(package_root: &Path) -> Result<HashSet<String>, String> {
+    if total != expected_size {
+        return Err(format!("File size mismatch: {filename:?}"));
+    }
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
+fn list_package_archives(package_root: &Path) -> Result<HashSet<String>, String> {
     let mut pending = vec![package_root.to_path_buf()];
     let mut found = HashSet::new();
     let mut visited_entries = 0usize;
@@ -612,13 +618,7 @@ fn hash_sha256_file(path: &Path, expected_size: u64, filename: &str) -> Result<S
         }
     }
     Ok(found)
-}               return Err("Package archive count exceeds the configured limit".into());
-            }
-        }
-    }
-    Ok(found)
 }
-
 fn is_static_asset_path(path: &str) -> bool {
     STATIC_ASSET_FILES.contains(&path)
         || STATIC_ASSET_DIRS
