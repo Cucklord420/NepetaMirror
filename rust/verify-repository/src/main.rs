@@ -31,6 +31,8 @@ const MAX_ASSET_MANIFEST_BYTES: u64 = 1024 * 1024;
 const MAX_STATIC_ASSET_COUNT: usize = 4096;
 // The current frozen mirror contains 185 archives; this allows more than 22x growth.
 const MAX_PACKAGE_ARCHIVE_COUNT: usize = 4096;
+// Bound traversal work even when a package tree contains many non-archive entries.
+const MAX_PACKAGE_TREE_ENTRY_COUNT: usize = 4096;
 // Win32 FILE_ATTRIBUTE_REPARSE_POINT from Microsoft's File Attribute Constants.
 #[cfg(windows)]
 const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
@@ -562,20 +564,22 @@ fn hash_sha256_file(path: &Path, expected_size: u64, filename: &str) -> Result<S
         }
         hasher.update(&buffer[..read]);
     }
-    if total != expected_size {
-        return Err(format!("File size mismatch: {filename:?}"));
-    }
-    Ok(format!("{:x}", hasher.finalize()))
-}
-
-fn list_package_archives(package_root: &Path) -> Result<HashSet<String>, String> {
+    if total !=fn list_package_archives(package_root: &Path) -> Result<HashSet<String>, String> {
     let mut pending = vec![package_root.to_path_buf()];
     let mut found = HashSet::new();
+    let mut visited_entries = 0usize;
     while let Some(directory) = pending.pop() {
         let entries =
             fs::read_dir(&directory).map_err(|e| format!("Cannot enumerate packages/: {e}"))?;
         for entry in entries {
             let entry = entry.map_err(|e| format!("Cannot enumerate packages/: {e}"))?;
+            visited_entries = visited_entries.checked_add(1).ok_or_else(|| {
+                "Package directory entry count exceeds the configured limit".to_string()
+            })?;
+            if visited_entries > MAX_PACKAGE_TREE_ENTRY_COUNT {
+                return Err("Package directory entry count exceeds the configured limit".into());
+            }
+
             let path = entry.path();
             let metadata = fs::symlink_metadata(&path)
                 .map_err(|e| format!("Cannot inspect package entry: {e}"))?;
@@ -589,13 +593,7 @@ fn list_package_archives(package_root: &Path) -> Result<HashSet<String>, String>
             if !metadata.is_file() {
                 return Err("Non-regular entry found under packages/".into());
             }
-            if !path
-                .extension()
-                .and_then(|extension| extension.to_str())
-                .is_some_and(|extension| extension.eq_ignore_ascii_case("deb"))
-            {
-                continue;
-            }
+
             let relative = path
                 .strip_prefix(package_root)
                 .map_err(|_| "Package entry escaped packages/".to_string())?;
@@ -610,6 +608,11 @@ fn list_package_archives(package_root: &Path) -> Result<HashSet<String>, String>
             found.insert(filename);
             if found.len() > MAX_PACKAGE_ARCHIVE_COUNT {
                 return Err("Package archive count exceeds the configured limit".into());
+            }
+        }
+    }
+    Ok(found)
+}               return Err("Package archive count exceeds the configured limit".into());
             }
         }
     }
