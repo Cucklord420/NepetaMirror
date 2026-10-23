@@ -1362,7 +1362,11 @@ mod tests {
         let bytes = b"fictional indexed archive";
         fs::write(package_dir.join("example.deb"), bytes).unwrap();
         let record = package_record(bytes);
-        fs::write(package_dir.join(".deb"), b"unindexed hidden synthetic archive").unwrap();
+        fs::write(
+            package_dir.join(".deb"),
+            b"unindexed hidden synthetic archive",
+        )
+        .unwrap();
 
         let error = verify_packages(root.path(), record.as_bytes()).unwrap_err();
         assert!(
@@ -1381,7 +1385,11 @@ mod tests {
             let bytes = b"fictional indexed archive";
             fs::write(package_dir.join("example.deb"), bytes).unwrap();
             let record = package_record(bytes);
-            fs::write(package_dir.join(filename), b"unindexed alias synthetic archive").unwrap();
+            fs::write(
+                package_dir.join(filename),
+                b"unindexed alias synthetic archive",
+            )
+            .unwrap();
 
             let result = verify_packages(root.path(), record.as_bytes());
             assert!(
