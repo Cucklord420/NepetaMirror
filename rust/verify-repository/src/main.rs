@@ -619,6 +619,7 @@ fn list_package_archives(package_root: &Path) -> Result<HashSet<String>, String>
     }
     Ok(found)
 }
+
 fn is_static_asset_path(path: &str) -> bool {
     STATIC_ASSET_FILES.contains(&path)
         || STATIC_ASSET_DIRS
