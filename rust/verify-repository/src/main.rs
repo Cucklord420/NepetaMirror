@@ -1354,6 +1354,63 @@ mod tests {
         assert!(verify_packages(root.path(), record.as_bytes()).is_err());
     }
 
+    #[test]
+    fn hidden_dot_deb_cannot_escape_package_inventory() {
+        let root = TestDir::new("nepeta-hidden-package-archive").unwrap();
+        let package_dir = root.path().join("packages");
+        fs::create_dir(&package_dir).unwrap();
+        let bytes = b"fictional indexed archive";
+        fs::write(package_dir.join("example.deb"), bytes).unwrap();
+        let record = package_record(bytes);
+        fs::write(package_dir.join(".deb"), b"unindexed hidden synthetic archive").unwrap();
+
+        let error = verify_packages(root.path(), record.as_bytes()).unwrap_err();
+        assert!(
+            error.contains("Unindexed package archive"),
+            "hidden archive was not included in the exact set check: {error}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn trailing_dot_and_space_archives_cannot_escape_package_inventory() {
+        for filename in ["orphan.deb.", "orphan.deb "] {
+            let root = TestDir::new("nepeta-package-alias").unwrap();
+            let package_dir = root.path().join("packages");
+            fs::create_dir(&package_dir).unwrap();
+            let bytes = b"fictional indexed archive";
+            fs::write(package_dir.join("example.deb"), bytes).unwrap();
+            let record = package_record(bytes);
+            fs::write(package_dir.join(filename), b"unindexed alias synthetic archive").unwrap();
+
+            let result = verify_packages(root.path(), record.as_bytes());
+            assert!(
+                result.is_err(),
+                "unindexed filename alias {filename:?} escaped archive inventory"
+            );
+        }
+    }
+
+    #[test]
+    fn package_tree_entry_limit_includes_directories() {
+        let root = TestDir::new("nepeta-package-tree-limit").unwrap();
+        let package_dir = root.path().join("packages");
+        fs::create_dir(&package_dir).unwrap();
+        let bytes = b"fictional indexed archive";
+        fs::write(package_dir.join("example.deb"), bytes).unwrap();
+        let record = package_record(bytes);
+
+        for index in 0..MAX_PACKAGE_ARCHIVE_COUNT {
+            fs::create_dir(package_dir.join(format!("empty-{index}"))).unwrap();
+        }
+
+        let error = verify_packages(root.path(), record.as_bytes()).unwrap_err();
+        assert!(
+            error.contains("Package directory entry count exceeds the configured limit"),
+            "unexpected error for over-limit package tree: {error}"
+        );
+    }
+
     #[cfg(unix)]
     #[test]
     fn symlinked_package_is_rejected() {
