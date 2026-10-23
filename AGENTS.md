@@ -4,7 +4,7 @@ Before substantive work, read the complete current `AGENTS.md` and `GUIDEBOOK.md
 
 This repository preserves upstream Nepeta/Cydia archives and site material. Keep package archives, published indexes, historical `Release`, depictions, images, attribution, and third-party licenses byte-identical unless the owner gives a separate explicit instruction. Never regenerate or replace mirror data to make a validation pass.
 
-All new executable code, automation, and tests in this repository must be Rust. Keep the verifier read-only. Use isolated, securely created test directories; a test may remove only a directory it created and owns. Do not follow symlinks or reparse points from mirror paths. Treat the tracked `Release` file as an integrity reference, not proof of publisher authenticity.
+All new application code and tests in this repository must be Rust. GitHub Actions workflow orchestration may use the minimum necessary runner-native shell for setup and platform checks; keep substantive validation in Rust. Keep the verifier read-only. Use isolated, securely created test directories; a test may remove only a directory it created and owns. Do not follow symlinks or reparse points from mirror paths. Treat the tracked `Release` file as an integrity reference, not proof of publisher authenticity.
 
 Mirror file path components are intentionally restricted to portable ASCII names. Revisit the path rules before adding non-ASCII or platform-specific filenames.
 
