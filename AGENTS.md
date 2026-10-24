@@ -9,3 +9,5 @@ All new application code and tests in this repository must be Rust. GitHub Actio
 Mirror file path components are intentionally restricted to portable ASCII names. Revisit the path rules before adding non-ASCII or platform-specific filenames.
 
 Before changing the verifier, inspect `rust/verify-repository/`, `.github/workflows/validate.yml`, the real indexes and package paths, and relevant migration history. Run `cargo fmt --check`, locked tests, strict Clippy, the verifier itself, original-versus-Rust behavior checks, and adversarial fixtures on the exact final candidate. Preserve synthetic test data only; never add real package contents to tests or logs. Report unsupported Windows filesystem layouts, Pages/runtime behavior, and external trust limits as blockers rather than inferring success.
+
+For every substantive task, record the exact current Toe-Tickling AGENTS.md and GUIDEBOOK.md revisions actually read. A URL, stale checkpoint, or prior task's note is not proof of current policy intake. Never execute mirrored package binaries or scripts in CI; CI may inspect package bytes only with the read-only verifier.
