@@ -27,7 +27,10 @@ fn parse_anchor_attributes(tag: &str) -> Option<HashMap<String, String>> {
     let mut attributes = HashMap::new();
 
     loop {
-        while bytes.get(index).is_some_and(|byte| byte.is_ascii_whitespace()) {
+        while bytes
+            .get(index)
+            .is_some_and(|byte| byte.is_ascii_whitespace())
+        {
             index += 1;
         }
         if index == bytes.len() - 1 {
@@ -35,9 +38,10 @@ fn parse_anchor_attributes(tag: &str) -> Option<HashMap<String, String>> {
         }
 
         let start = index;
-        if !bytes.get(index).is_some_and(|byte| {
-            byte.is_ascii_alphabetic() || matches!(byte, b'_' | b':')
-        }) {
+        if !bytes
+            .get(index)
+            .is_some_and(|byte| byte.is_ascii_alphabetic() || matches!(byte, b'_' | b':'))
+        {
             return None;
         }
         index += 1;
@@ -47,14 +51,20 @@ fn parse_anchor_attributes(tag: &str) -> Option<HashMap<String, String>> {
             index += 1;
         }
         let name = tag[start..index].to_ascii_lowercase();
-        while bytes.get(index).is_some_and(|byte| byte.is_ascii_whitespace()) {
+        while bytes
+            .get(index)
+            .is_some_and(|byte| byte.is_ascii_whitespace())
+        {
             index += 1;
         }
         if bytes.get(index) != Some(&b'=') {
             return None;
         }
         index += 1;
-        while bytes.get(index).is_some_and(|byte| byte.is_ascii_whitespace()) {
+        while bytes
+            .get(index)
+            .is_some_and(|byte| byte.is_ascii_whitespace())
+        {
             index += 1;
         }
 
@@ -96,12 +106,13 @@ fn landing_page_logo_markup_matches_its_canonical_url() {
 
     let logo = logo_anchor(INDEX_HTML).and_then(parse_anchor_attributes);
     let logo = logo.expect("logo anchor should have well-formed quoted attributes");
-    assert_eq!(logo.len(), 2, "logo anchor should contain only class and href");
-    assert_eq!(logo.get("class").map(String::as_str), Some("logo"));
     assert_eq!(
-        logo.get("href").map(String::as_str),
-        Some(CANONICAL_URL)
+        logo.len(),
+        2,
+        "logo anchor should contain only class and href"
     );
+    assert_eq!(logo.get("class").map(String::as_str), Some("logo"));
+    assert_eq!(logo.get("href").map(String::as_str), Some(CANONICAL_URL));
     assert!(INDEX_HTML.contains(&format!(
         "<meta property=\"og:url\" content=\"{CANONICAL_URL}\">"
     )));
