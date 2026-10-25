@@ -1629,6 +1629,49 @@ mod tests {
         assert!(verify(&parent.path().join("missing")).is_err());
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn package_inventory_rejects_backslash_alias_of_nested_archive() {
+        let root = TestDir::new("nepeta-package-backslash-alias").unwrap();
+        let package_root = root.path().join("packages");
+        let canonical_dir = package_root.join("nested");
+        fs::create_dir_all(&canonical_dir).unwrap();
+
+        let bytes = b"fictional indexed archive";
+        fs::write(canonical_dir.join("alias.deb"), bytes).unwrap();
+        fs::write(
+            package_root.join(r"nested\alias.deb"),
+            b"synthetic backslash alias",
+        )
+        .unwrap();
+        let record =
+            package_record(bytes).replace("packages/example.deb", "packages/nested/alias.deb");
+
+        let error = verify_packages(root.path(), record.as_bytes()).unwrap_err();
+        assert!(
+            error.contains("Unsafe package archive path"),
+            "backslash-containing archive alias was not rejected: {error}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn static_asset_inventory_rejects_backslash_alias_of_nested_asset() {
+        let root = TestDir::new("nepeta-static-backslash-alias").unwrap();
+        static_asset_fixture(root.path());
+        fs::write(
+            root.path().join("depiction").join(r"nested\sample.html"),
+            b"synthetic backslash alias",
+        )
+        .unwrap();
+
+        let error = verify_static_assets(root.path()).unwrap_err();
+        assert!(
+            error.contains("Invalid static asset path"),
+            "backslash-containing static asset alias was not rejected: {error}"
+        );
+    }
+
     #[test]
     fn live_repository_content_passes_all_checks() {
         let result = verify(&root());
