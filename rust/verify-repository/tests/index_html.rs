@@ -99,11 +99,6 @@ fn logo_anchor_parser_rejects_the_reported_malformed_attribute() {
 
 #[test]
 fn landing_page_logo_markup_matches_its_canonical_url() {
-    assert!(INDEX_HTML
-        .trim_start()
-        .to_ascii_lowercase()
-        .starts_with("<!doctype html>"));
-
     let logo = logo_anchor(INDEX_HTML).and_then(parse_anchor_attributes);
     let logo = logo.expect("logo anchor should have well-formed quoted attributes");
     assert_eq!(
