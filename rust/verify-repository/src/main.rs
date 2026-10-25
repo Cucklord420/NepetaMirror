@@ -1561,6 +1561,34 @@ mod tests {
     }
 
     #[test]
+    fn landing_page_logo_link_and_canonical_url_are_well_formed_and_consistent() {
+        let repository_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let html = fs::read_to_string(repository_root.join("index.html"))
+            .expect("read the tracked landing page");
+        let canonical_url = "https://chr0nict.github.io/Nepeta-Mirror/";
+        let logo_anchor = format!("<a class=\"logo\" href=\"{canonical_url}\">");
+        let canonical_meta =
+            format!("<meta property=\"og:url\" content=\"{canonical_url}\">");
+
+        assert!(
+            html.starts_with("<!doctype html>"),
+            "landing page must declare HTML5 doctype"
+        );
+        assert!(
+            html.contains(&logo_anchor),
+            "logo link must point to the declared canonical URL"
+        );
+        assert!(
+            html.contains(&canonical_meta),
+            "og:url must match the canonical logo destination"
+        );
+        assert!(
+            !html.contains("\"=\"\""),
+            "landing page contains the malformed stray logo attribute"
+        );
+    }
+
+    #[test]
     fn static_assets_require_exact_manifest_and_hashes() {
         let root = TestDir::new("nepeta-static-assets").unwrap();
         static_asset_fixture(root.path());
