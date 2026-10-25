@@ -1567,8 +1567,7 @@ mod tests {
             .expect("read the tracked landing page");
         let canonical_url = "https://chr0nict.github.io/Nepeta-Mirror/";
         let logo_anchor = format!("<a class=\"logo\" href=\"{canonical_url}\">");
-        let canonical_meta =
-            format!("<meta property=\"og:url\" content=\"{canonical_url}\">");
+        let canonical_meta = format!("<meta property=\"og:url\" content=\"{canonical_url}\">");
 
         assert!(
             html.starts_with("<!doctype html>"),
