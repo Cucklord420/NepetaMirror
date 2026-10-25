@@ -9,7 +9,7 @@ use sha2::{Digest, Sha256, Sha512};
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
 use std::io::Read;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use xz2::read::XzDecoder;
 use xz2::stream::{Stream, CONCATENATED};
 
@@ -83,9 +83,9 @@ fn safe_path_component(component: &str) -> bool {
         || component == ".."
         || component.ends_with(['.', ' '])
         || !component.is_ascii()
-        || component
-            .chars()
-            .any(|ch| ch.is_control() || matches!(ch, ':' | '*' | '?' | '"' | '<' | '>' | '|'))
+        || component.chars().any(|ch| {
+            ch.is_control() || matches!(ch, '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|')
+        })
     {
         return false;
     }
@@ -107,6 +107,24 @@ fn safe_path_component(component: &str) -> bool {
             device.as_str(),
             "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$"
         )
+}
+
+fn portable_relative_path(path: &Path) -> Option<String> {
+    let mut components = Vec::new();
+    for component in path.components() {
+        let Component::Normal(name) = component else {
+            return None;
+        };
+        let name = name.to_str()?;
+        if !safe_path_component(name) {
+            return None;
+        }
+        components.push(name);
+    }
+    if components.is_empty() {
+        return None;
+    }
+    Some(components.join("/"))
 }
 
 fn checked_relative_regular_file(root: &Path, relative: &str) -> Result<PathBuf, String> {
@@ -621,6 +639,11 @@ fn list_package_archives(package_root: &Path) -> Result<HashSet<String>, String>
             if is_link_or_reparse(&metadata) {
                 return Err("Linked entries are not allowed under packages/".into());
             }
+            let relative_path = path
+                .strip_prefix(package_root)
+                .map_err(|_| "Package entry escaped packages/".to_string())?;
+            let relative = portable_relative_path(relative_path)
+                .ok_or_else(|| format!("Unsafe package archive path: {relative_path:?}"))?;
             if metadata.is_dir() {
                 pending.push(path);
                 continue;
@@ -629,13 +652,6 @@ fn list_package_archives(package_root: &Path) -> Result<HashSet<String>, String>
                 return Err("Non-regular entry found under packages/".into());
             }
 
-            let relative = path
-                .strip_prefix(package_root)
-                .map_err(|_| "Package entry escaped packages/".to_string())?;
-            let relative = relative
-                .to_str()
-                .ok_or_else(|| "Package path is not valid UTF-8".to_string())?
-                .replace('\\', "/");
             let filename = format!("packages/{relative}");
             if !package_name_is_safe(&filename) {
                 return Err(format!("Unsafe package archive path: {filename:?}"));
@@ -699,6 +715,11 @@ fn collect_static_asset_paths(root: &Path) -> Result<HashSet<String>, String> {
                 if is_link_or_reparse(&metadata) {
                     return Err(format!("Linked static asset is not allowed: {directory}/"));
                 }
+                let relative_path = asset
+                    .strip_prefix(&canonical_root)
+                    .map_err(|_| format!("Static asset escapes repository: {directory}/"))?;
+                let relative = portable_relative_path(relative_path)
+                    .ok_or_else(|| format!("Invalid static asset path: {relative_path:?}"))?;
                 if metadata.is_dir() {
                     pending.push(asset);
                     continue;
@@ -709,17 +730,7 @@ fn collect_static_asset_paths(root: &Path) -> Result<HashSet<String>, String> {
                 if metadata.len() > MAX_STATIC_ASSET_BYTES {
                     return Err(format!("Static asset exceeds the size limit: {directory}/"));
                 }
-                let relative = asset
-                    .strip_prefix(&canonical_root)
-                    .map_err(|_| format!("Static asset escapes repository: {directory}/"))?
-                    .to_str()
-                    .ok_or_else(|| "Static asset path is not valid UTF-8".to_string())?
-                    .replace('\\', "/");
-                if !is_static_asset_path(&relative)
-                    || relative
-                        .split('/')
-                        .any(|component| !safe_path_component(component))
-                {
+                if !is_static_asset_path(&relative) {
                     return Err(format!("Invalid static asset path: {relative:?}"));
                 }
                 found.insert(relative);
