@@ -1027,6 +1027,35 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn case_colliding_package_directory_paths_are_rejected() {
+        let root = TestDir::new("nepeta-package-case-alias").unwrap();
+        let package_dir = root.path().join("packages");
+        let upper_dir = package_dir.join("Case");
+        let lower_dir = package_dir.join("case");
+        fs::create_dir_all(&upper_dir).unwrap();
+        fs::create_dir_all(&lower_dir).unwrap();
+
+        let upper_bytes = b"synthetic uppercase path archive";
+        let lower_bytes = b"synthetic lowercase path archive";
+        fs::write(upper_dir.join("one.deb"), upper_bytes).unwrap();
+        fs::write(lower_dir.join("two.deb"), lower_bytes).unwrap();
+        let upper = package_record(upper_bytes)
+            .replace("Package: example", "Package: upper")
+            .replace("packages/example.deb", "packages/Case/one.deb");
+        let lower = package_record(lower_bytes)
+            .replace("Package: example", "Package: lower")
+            .replace("packages/example.deb", "packages/case/two.deb");
+        let index = format!("{upper}\n{lower}");
+
+        let result = verify_packages(root.path(), index.as_bytes());
+        assert!(
+            result.is_err(),
+            "case-colliding package path components were accepted: {result:?}"
+        );
+    }
+
     #[test]
     fn path_safety_rejects_cross_platform_aliases() {
         assert!(package_name_is_safe("packages/test.deb"));
@@ -1239,6 +1268,18 @@ mod tests {
 
         let missing = good.replace("SHA512:\n", "");
         fs::write(root.path().join("Release"), missing).unwrap();
+        assert!(verify_release(root.path()).is_err());
+
+        let sha256 = digest("SHA256", b"synthetic index").unwrap();
+        let correct_size = b"synthetic index".len();
+        let correct_gzip_row = format!(" {sha256} {correct_size} Packages.gz\\n");
+        let missing_entry = good.replacen(&correct_gzip_row, "", 1);
+        fs::write(root.path().join("Release"), missing_entry).unwrap();
+        assert!(verify_release(root.path()).is_err());
+
+        let wrong_size_row = format!(" {sha256} {} Packages.gz\\n", correct_size + 1);
+        let wrong_size = good.replacen(&correct_gzip_row, &wrong_size_row, 1);
+        fs::write(root.path().join("Release"), wrong_size).unwrap();
         assert!(verify_release(root.path()).is_err());
 
         let duplicate = good.replace(
@@ -1485,12 +1526,36 @@ mod tests {
             .contains("checksum mismatch"));
 
         fs::write(root.path().join("icons/sample.png"), b"sample icon").unwrap();
+
+        fs::write(
+            root.path().join("depiction/nested/sample.html"),
+            b"tampered depiction",
+        )
+        .unwrap();
+        assert!(verify_static_assets(root.path())
+            .unwrap_err()
+            .contains("checksum mismatch"));
+        fs::write(
+            root.path().join("depiction/nested/sample.html"),
+            b"sample depiction",
+        )
+        .unwrap();
+
         fs::write(root.path().join("depiction/unlisted.html"), b"unlisted").unwrap();
         assert!(verify_static_assets(root.path())
             .unwrap_err()
             .contains("exact on-disk asset set"));
 
         fs::remove_file(root.path().join("depiction/unlisted.html")).unwrap();
+        fs::remove_file(root.path().join("depiction/nested/sample.html")).unwrap();
+        assert!(verify_static_assets(root.path())
+            .unwrap_err()
+            .contains("Unexpected static asset"));
+        fs::write(
+            root.path().join("depiction/nested/sample.html"),
+            b"sample depiction",
+        )
+        .unwrap();
         fs::remove_file(root.path().join("icons/sample.png")).unwrap();
         assert!(verify_static_assets(root.path())
             .unwrap_err()
