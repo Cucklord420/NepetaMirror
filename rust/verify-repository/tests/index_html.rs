@@ -112,3 +112,11 @@ fn landing_page_logo_markup_matches_its_canonical_url() {
         "<meta property=\"og:url\" content=\"{CANONICAL_URL}\">"
     )));
 }
+
+#[test]
+fn landing_page_declares_html5_and_english_language() {
+    assert!(
+        INDEX_HTML.starts_with("<!DOCTYPE html>\n<html lang=\"en\">"),
+        "landing page should declare an HTML5 doctype and its English language"
+    );
+}
