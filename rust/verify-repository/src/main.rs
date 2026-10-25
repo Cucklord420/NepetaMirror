@@ -428,6 +428,35 @@ fn package_name_is_safe(filename: &str) -> bool {
     relative.split('/').all(safe_path_component)
 }
 
+fn register_casefolded_package_path(
+    filename: &str,
+    paths: &mut HashMap<String, String>,
+) -> Result<(), String> {
+    let relative = filename
+        .strip_prefix("packages/")
+        .ok_or_else(|| format!("Unsafe package path: {filename:?}"))?;
+    let mut exact = String::from("packages");
+    let mut folded = String::from("packages");
+    for component in relative.split('/') {
+        exact.push('/');
+        exact.push_str(component);
+        folded.push('/');
+        folded.push_str(&component.to_ascii_lowercase());
+        match paths.get(&folded) {
+            Some(previous) if previous != &exact => {
+                return Err(format!(
+                    "Case-insensitive package path collision: {previous:?} and {exact:?}"
+                ));
+            }
+            Some(_) => {}
+            None => {
+                paths.insert(folded.clone(), exact.clone());
+            }
+        }
+    }
+    Ok(())
+}
+
 fn valid_field_name(name: &str) -> bool {
     let mut chars = name.bytes();
     chars
@@ -753,6 +782,7 @@ fn verify_packages(root: &Path, plain: &[u8]) -> Result<usize, String> {
         .replace("\r\n", "\n");
     let (_canonical_root, package_root) = package_root(root)?;
     let mut seen = HashSet::<String>::new();
+    let mut casefolded_paths = HashMap::<String, String>::new();
     let mut count = 0usize;
     for entry in text.split("\n\n") {
         if entry.trim().is_empty() {
@@ -818,6 +848,7 @@ fn verify_packages(root: &Path, plain: &[u8]) -> Result<usize, String> {
         if !package_name_is_safe(filename) {
             return Err(format!("Unsafe or missing package filename: {filename:?}"));
         }
+        register_casefolded_package_path(filename, &mut casefolded_paths)?;
         if !seen.insert(filename.to_string()) {
             return Err(format!(
                 "Repeated package filename in Packages: {filename:?}"
@@ -1272,12 +1303,12 @@ mod tests {
 
         let sha256 = digest("SHA256", b"synthetic index").unwrap();
         let correct_size = b"synthetic index".len();
-        let correct_gzip_row = format!(" {sha256} {correct_size} Packages.gz\\n");
+        let correct_gzip_row = format!(" {sha256} {correct_size} Packages.gz\n");
         let missing_entry = good.replacen(&correct_gzip_row, "", 1);
         fs::write(root.path().join("Release"), missing_entry).unwrap();
         assert!(verify_release(root.path()).is_err());
 
-        let wrong_size_row = format!(" {sha256} {} Packages.gz\\n", correct_size + 1);
+        let wrong_size_row = format!(" {sha256} {} Packages.gz\n", correct_size + 1);
         let wrong_size = good.replacen(&correct_gzip_row, &wrong_size_row, 1);
         fs::write(root.path().join("Release"), wrong_size).unwrap();
         assert!(verify_release(root.path()).is_err());
@@ -1529,7 +1560,7 @@ mod tests {
 
         fs::write(
             root.path().join("depiction/nested/sample.html"),
-            b"tampered depiction",
+            b"tamper depiction",
         )
         .unwrap();
         assert!(verify_static_assets(root.path())
