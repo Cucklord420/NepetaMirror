@@ -1058,6 +1058,21 @@ mod tests {
         }
     }
 
+    #[test]
+    fn casefolded_package_path_components_reject_directory_and_file_aliases() {
+        let mut paths = HashMap::new();
+        register_casefolded_package_path("packages/Case/one.deb", &mut paths).unwrap();
+        let directory_error =
+            register_casefolded_package_path("packages/case/two.deb", &mut paths).unwrap_err();
+        assert!(directory_error.contains("collision"), "{directory_error}");
+
+        let mut files = HashMap::new();
+        register_casefolded_package_path("packages/example.deb", &mut files).unwrap();
+        let file_error =
+            register_casefolded_package_path("packages/EXAMPLE.deb", &mut files).unwrap_err();
+        assert!(file_error.contains("collision"), "{file_error}");
+    }
+
     #[cfg(unix)]
     #[test]
     fn case_colliding_package_directory_paths_are_rejected() {
