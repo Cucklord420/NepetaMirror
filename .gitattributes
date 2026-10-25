@@ -1,0 +1,13 @@
+/CydiaIcon.png -text
+/Packages -text
+/Packages.bz2 -text
+/Packages.gz -text
+/Packages.lzma -text
+/Packages.xz -text
+/Release -text
+/_config.yml -text
+/index.html -text
+/nepeta.png -text
+/style.css -text
+/depiction/** -text
+/icons/** -text
