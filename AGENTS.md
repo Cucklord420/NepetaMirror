@@ -1,3 +1,5 @@
+**OWNER SECURITY-FIRST DIRECTIVE (10-30-2026): SECURITY IS PRIORITY #1.** Security takes precedence over features, speed, performance, cost, convenience and backlog reduction. Investigate vulnerabilities, secrets exposure, privacy/access, supply chain, CI/release integrity and recovery hazards first. Never bypass required reviews, security tests, least privilege or safe rollback. Do not publish private findings or treat this as permission for destructive changes.
+
 # Repository instructions — NepetaMirror
 
 Before substantive work, read the complete current `AGENTS.md` and `GUIDEBOOK.md` from the default branch of [Toe-Tickling](https://github.com/Cucklord420/Toe-Tickling). At this checkpoint they are at Toe-Tickling `4f519c3ea1ed120d36aefea014fbf31bc0593304`, with `AGENTS.md` blob `5407f0bcf6dd092033ba80399b02519c13c1a998` and `GUIDEBOOK.md` blob `45bdd5dce12eaf8cb74a22e0868a64852d85ed94`. Confirm the current revisions before each task; this link is an instruction pointer and does not imply automatic loading.
